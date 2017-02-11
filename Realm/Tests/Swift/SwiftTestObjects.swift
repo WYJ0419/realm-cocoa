@@ -47,16 +47,20 @@ class SwiftObject: RLMObject {
 }
 
 class SwiftOptionalObject: RLMObject {
-    // FIXME: Support all optional property types
-//    dynamic var optBoolCol: Bool?
-//    dynamic var optIntCol: Int?
-//    dynamic var optFloatCol: Float?
-//    dynamic var optDoubleCol: Double?
     dynamic var optStringCol: String?
     dynamic var optNSStringCol: NSString?
     dynamic var optBinaryCol: Data?
     dynamic var optDateCol: Date?
     dynamic var optObjectCol: SwiftBoolObject?
+}
+
+class SwiftPrimitiveArrayObject: RLMObject {
+    dynamic var stringCol = RLMArray<NSString>(objectType: .string, optional: false)
+    dynamic var optStringCol = RLMArray(objectType: .string, optional: true)
+    dynamic var dataCol = RLMArray<NSData>(objectType: .data, optional: false)
+    dynamic var optDataCol = RLMArray(objectType: .data, optional: true)
+    dynamic var dateCol = RLMArray<NSDate>(objectType: .date, optional: false)
+    dynamic var optDateCol = RLMArray(objectType: .date, optional: true)
 }
 
 class SwiftDogObject: RLMObject {

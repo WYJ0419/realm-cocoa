@@ -110,7 +110,8 @@ using namespace realm;
     Class superClass = class_getSuperclass(cls);
     NSArray *allProperties = @[];
     while (superClass && superClass != RLMObjectBase.class) {
-        allProperties = [[RLMObjectSchema propertiesForClass:cls isSwift:isSwift] arrayByAddingObjectsFromArray:allProperties];
+        allProperties = [[RLMObjectSchema propertiesForClass:cls isSwift:isSwift]
+                         arrayByAddingObjectsFromArray:allProperties];
         cls = superClass;
         superClass = class_getSuperclass(superClass);
     }
@@ -127,14 +128,14 @@ using namespace realm;
     // verify that we didn't add any properties twice due to inheritance
     if (allProperties.count != [NSSet setWithArray:[allProperties valueForKey:@"name"]].count) {
         NSCountedSet *countedPropertyNames = [NSCountedSet setWithArray:[allProperties valueForKey:@"name"]];
-        NSSet *duplicatePropertyNames = [countedPropertyNames filteredSetUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id object, NSDictionary *) {
+        NSArray *duplicatePropertyNames = [countedPropertyNames filteredSetUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id object, NSDictionary *) {
             return [countedPropertyNames countForObject:object] > 1;
-        }]];
+        }]].allObjects;
 
         if (duplicatePropertyNames.count == 1) {
-            @throw RLMException(@"Property '%@' is declared multiple times in the class hierarchy of '%@'", duplicatePropertyNames.allObjects.firstObject, className);
+            @throw RLMException(@"Property '%@' is declared multiple times in the class hierarchy of '%@'", duplicatePropertyNames.firstObject, className);
         } else {
-            @throw RLMException(@"Object '%@' has properties that are declared multiple times in its class hierarchy: '%@'", className, [duplicatePropertyNames.allObjects componentsJoinedByString:@"', '"]);
+            @throw RLMException(@"Object '%@' has properties that are declared multiple times in its class hierarchy: '%@'", className, [duplicatePropertyNames componentsJoinedByString:@"', '"]);
         }
     }
 
@@ -156,7 +157,8 @@ using namespace realm;
     }
 
     for (RLMProperty *prop in schema.properties) {
-        if (prop.optional && !RLMPropertyTypeIsNullable(prop.type)) {
+        if (prop.optional && prop.array && (prop.type == RLMPropertyTypeObject || prop.type == RLMPropertyTypeLinkingObjects)) {
+            // FIXME: message is wrong
             @throw RLMException(@"Only 'string', 'binary', and 'object' properties can be made optional, and property '%@' is of type '%@'.",
                                 prop.name, RLMTypeToString(prop.type));
         }
@@ -257,48 +259,50 @@ using namespace realm;
         for (RLMProperty *property in propArray) {
             property.optional = false;
         }
-        [optionalProperties enumerateKeysAndObjectsUsingBlock:^(NSString *propertyName, NSNumber *propertyType, __unused BOOL *stop) {
+        [optionalProperties enumerateKeysAndObjectsUsingBlock:^(NSString *propertyName, NSNumber *propertyType, BOOL *) {
             if ([ignoredProperties containsObject:propertyName]) {
                 return;
             }
-            NSUInteger existing = [propArray indexOfObjectPassingTest:^BOOL(RLMProperty *obj, __unused NSUInteger idx, __unused BOOL *stop) {
+            NSUInteger existing = [propArray indexOfObjectPassingTest:^BOOL(RLMProperty *obj, NSUInteger, BOOL *) {
                 return [obj.name isEqualToString:propertyName];
             }];
+
             RLMProperty *property;
             if (existing != NSNotFound) {
                 property = propArray[existing];
                 property.optional = true;
             }
-            if (auto type = RLMCoerceToNil(propertyType)) {
-                if (existing == NSNotFound) {
-                    // Check to see if this optional property is an underlying storage property for a Swift lazy var.
-                    // Managed lazy vars are't allowed.
-                    // NOTE: Revisit this once property behaviors are implemented in Swift.
-                    if (NSString *lazyPropertyBaseName = [self baseNameForLazySwiftProperty:propertyName]) {
-                        if ([ignoredProperties containsObject:lazyPropertyBaseName]) {
-                            // This property is the storage property for a ignored lazy Swift property. Just continue.
-                            return;
-                        } else {
-                            @throw RLMException(@"Lazy managed property '%@' is not allowed on a Realm Swift object class. Either add the property to the ignored properties list or make it non-lazy.", lazyPropertyBaseName);
-                        }
-                    }
-                    // The current property isn't a storage property for a lazy Swift property.
-                    property = [[RLMProperty alloc] initSwiftOptionalPropertyWithName:propertyName
-                                                                              indexed:[indexed containsObject:propertyName]
-                                                                                 ivar:class_getInstanceVariable(objectClass, propertyName.UTF8String)
-                                                                         propertyType:RLMPropertyType(type.intValue)];
-                    [propArray addObject:property];
-                }
-                else {
-                    property.type = RLMPropertyType(type.intValue);
-                }
+            auto type = RLMCoerceToNil(propertyType);
+            if (!type) {
+                return;
             }
+            if (property) {
+                property.type = RLMPropertyType(type.intValue);
+                return;
+            }
+
+            // Check to see if this optional property is an underlying storage property for a Swift lazy var.
+            // Managed lazy vars are't allowed.
+            // NOTE: Revisit this once property behaviors are implemented in Swift.
+            if (NSString *lazyPropertyBaseName = [self baseNameForLazySwiftProperty:propertyName]) {
+                if ([ignoredProperties containsObject:lazyPropertyBaseName]) {
+                    // This property is the storage property for a ignored lazy Swift property. Just continue.
+                    return;
+                }
+                @throw RLMException(@"Lazy managed property '%@' is not allowed on a Realm Swift object class. Either add the property to the ignored properties list or make it non-lazy.", lazyPropertyBaseName);
+            }
+            // The current property isn't a storage property for a lazy Swift property.
+            property = [[RLMProperty alloc] initSwiftOptionalPropertyWithName:propertyName
+                                                                      indexed:[indexed containsObject:propertyName]
+                                                                         ivar:class_getInstanceVariable(objectClass, propertyName.UTF8String)
+                                                                 propertyType:RLMPropertyType(type.intValue)];
+            [propArray addObject:property];
         }];
     }
     if (auto requiredProperties = [objectUtil requiredPropertiesForClass:objectClass]) {
         for (RLMProperty *property in propArray) {
             bool required = [requiredProperties containsObject:property.name];
-            if (required && property.type == RLMPropertyTypeObject) {
+            if (required && property.type == RLMPropertyTypeObject && !property.array) {
                 @throw RLMException(@"Object properties cannot be made required, "
                                     "but '+[%@ requiredProperties]' included '%@'", objectClass, property.name);
             }
@@ -307,8 +311,9 @@ using namespace realm;
     }
 
     for (RLMProperty *property in propArray) {
-        if (!property.optional && property.type == RLMPropertyTypeObject) { // remove if/when core supports required link columns
-            @throw RLMException(@"The `%@.%@` property must be marked as being optional.", [objectClass className], property.name);
+        if (!property.optional && property.type == RLMPropertyTypeObject && !property.array) {
+            @throw RLMException(@"The `%@.%@` property must be marked as being optional.",
+                                [objectClass className], property.name);
         }
     }
 
