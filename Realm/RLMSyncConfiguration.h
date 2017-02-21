@@ -32,6 +32,28 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) RLMSyncUser *user;
 
 /**
+ If YES, a Realm opened using this configuration will behave differently in a number of ways.
+
+ If the Realm is opened synchronously on a background thread, the initializer will block
+ until an initial set of changes have been downloaded and applied to the Realm.
+
+ If the Realm is opened asynchronously, the callback will only run once an initial set of
+ changes have been downloaded and applied to the Realm, or an error occurs.
+
+ If the Realm is opened synchronously on the main thread, an exception will be thrown.
+ */
+@property (nonatomic) BOOL waitForServerChanges;
+
+/**
+ If `waitForServerChanges` is set, how long Realm should wait for a Realm to download before
+ timing out. If this value is 0 or negative, it is ignored and a Realm download will never
+ time out.
+
+ If `waitForServerChanges` is not set, this property is ignored.
+ */
+@property (nonatomic) NSTimeInterval serverWaitTimeout;
+
+/**
  The URL of the remote Realm upon the Realm Object Server.
  
  @warning The URL cannot end with `.realm`, `.realm.lock` or `.realm.management`.

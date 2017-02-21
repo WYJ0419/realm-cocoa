@@ -49,6 +49,8 @@
 using namespace realm;
 using util::File;
 
+static void(^s_openRealmWorkBlock)(RLMRealm *) = nil;
+
 @interface RLMRealmNotificationToken : RLMNotificationToken
 @property (nonatomic, strong) RLMRealm *realm;
 @property (nonatomic, copy) RLMNotificationBlock block;
@@ -56,6 +58,7 @@ using util::File;
 
 @interface RLMRealm ()
 @property (nonatomic, strong) NSHashTable<RLMRealmNotificationToken *> *notificationHandlers;
+@property (class, nonatomic, readonly) dispatch_queue_t asyncOpenDispatchQueue;
 - (void)sendNotifications:(RLMNotification)notification;
 @end
 
@@ -170,6 +173,31 @@ NSData *RLMRealmValidatedEncryptionKey(NSData *key) {
     configuration.fileURL = fileURL;
     return [RLMRealm realmWithConfiguration:configuration error:nil];
 }
+
++ (dispatch_queue_t)asyncOpenDispatchQueue {
+    static dispatch_queue_t queue;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        queue = dispatch_queue_create("io.realm.asyncOpenDispatchQueue", DISPATCH_QUEUE_CONCURRENT);
+    });
+    return queue;
+}
+
++ (void)openAsynchronouslyWithConfiguration:(RLMRealmConfiguration *)configuration
+                                   callback:(RLMAsynchronouslyOpenRealmCallback)callback {
+    dispatch_async(RLMRealm.asyncOpenDispatchQueue, ^{
+        NSError *error = nil;
+        @autoreleasepool {
+            RLMRealm *realm = [RLMRealm realmWithConfiguration:configuration error:&error];
+            if (realm && !error) {
+                callback([realm.configuration copy], nil);
+            } else {
+                callback(nil, error);
+            }
+        }
+    });
+}
+
 // ARC tries to eliminate calls to autorelease when the value is then immediately
 // returned, but this results in significantly different semantics between debug
 // and release builds for RLMRealm, so force it to always autorelease.
@@ -250,6 +278,10 @@ REALM_NOINLINE void RLMRealmTranslateException(NSError **error) {
     catch (const std::exception &exp) {
         RLMSetErrorOrThrow(RLMMakeError(RLMErrorFail, exp), error);
     }
+}
+
++ (void)registerOnRealmOpenWorkBlock:(void(^)(RLMRealm *))workBlock {
+    s_openRealmWorkBlock = workBlock;
 }
 
 + (instancetype)realmWithConfiguration:(RLMRealmConfiguration *)configuration error:(NSError **)error {
@@ -360,6 +392,9 @@ REALM_NOINLINE void RLMRealmTranslateException(NSError **error) {
     if (!readOnly) {
         realm->_realm->m_binding_context = RLMCreateBindingContext(realm);
         realm->_realm->m_binding_context->realm = realm->_realm;
+    }
+    if (s_openRealmWorkBlock) {
+        s_openRealmWorkBlock(realm);
     }
 
     return RLMAutorelease(realm);

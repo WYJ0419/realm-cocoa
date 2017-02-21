@@ -39,6 +39,13 @@ void RLMRealmTranslateException(NSError **error);
 
 + (void)resetRealmState;
 
+// Register or clear a single block that is called at the end of
+// `realmWithConfiguration:error:`. This block can be used by additional
+// Realm components (read: sync) to perform any additional work that
+// needs to be done right before a newly created `RLMRealm` object is
+// returned.
++ (void)registerOnRealmOpenWorkBlock:(void(^)(RLMRealm *))workBlock;
+
 - (void)registerEnumerator:(RLMFastEnumerator *)enumerator;
 - (void)unregisterEnumerator:(RLMFastEnumerator *)enumerator;
 - (void)detachAllEnumerators;

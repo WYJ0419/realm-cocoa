@@ -18,11 +18,14 @@
 
 #import "RLMSyncManager_Private.h"
 
+#import "RLMRealm+RLMSync.hpp"
 #import "RLMRealmConfiguration+Sync.h"
 #import "RLMSyncConfiguration_Private.hpp"
 #import "RLMSyncSession_Private.hpp"
 #import "RLMSyncUser_Private.hpp"
 #import "RLMUtil.hpp"
+
+#import "RLMRealm_Private.h"
 
 #import "sync/sync_config.hpp"
 #import "sync/sync_manager.hpp"
@@ -91,6 +94,30 @@ static dispatch_once_t s_onceToken;
 + (instancetype)sharedManager {
     dispatch_once(&s_onceToken, ^{
         s_sharedManager = [[RLMSyncManager alloc] initWithCustomRootDirectory:nil];
+        [RLMRealm registerOnRealmOpenWorkBlock:^(RLMRealm *realm) {
+            // If the wait flag's set and we're on the main thread, throw. Otherwise, just stall.
+            RLMSyncConfiguration *syncConfig = realm.configuration.syncConfiguration;
+            if (syncConfig.waitForServerChanges) {
+                if ([NSThread isMainThread]) {
+                    @throw RLMException(@"A synced Realm cannot be opened on the main thread for any configuration "
+                                        @"whose 'waitForServerChanges' property is set to true.");
+                } else {
+                    auto session = [realm syncSession];
+                    REALM_ASSERT(session);
+                    // Wait until the session downloads or times out.
+                    int64_t delay = DISPATCH_TIME_FOREVER;
+                    if (syncConfig.serverWaitTimeout > 0) {
+                        delay = (int64_t)([@(syncConfig.serverWaitTimeout) integerValue] * NSEC_PER_SEC);
+                    }
+                    int64_t delay_in_ns = (int64_t)(delay * NSEC_PER_SEC);
+                    dispatch_semaphore_t wait_sema = dispatch_semaphore_create(0);
+                    session->wait_for_download_completion([wait_sema](auto) {
+                        dispatch_semaphore_signal(wait_sema);
+                    });
+                    dispatch_semaphore_wait(wait_sema, dispatch_time(DISPATCH_TIME_NOW, delay_in_ns));
+                }
+            }
+        }];
     });
     return s_sharedManager;
 }
